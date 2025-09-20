@@ -11,6 +11,7 @@ import uvicorn
 from app.api import recommendations, images, analytics
 from app.core.config import settings
 from app.core.logging import setup_logging
+from app.core.database import init_db
 
 # Setup logging
 setup_logging()
@@ -37,6 +38,11 @@ app.add_middleware(
 app.include_router(recommendations.router, prefix="/api/v1/recommendations", tags=["recommendations"])
 app.include_router(images.router, prefix="/api/v1/images", tags=["images"])
 app.include_router(analytics.router, prefix="/api/v1/analytics", tags=["analytics"])
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize database on startup"""
+    init_db()
 
 @app.get("/")
 async def root():

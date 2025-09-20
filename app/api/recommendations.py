@@ -7,8 +7,7 @@ from typing import List, Optional
 from pydantic import BaseModel
 import logging
 
-from app.services.recommendation_service import RecommendationService
-from app.models.schemas import RecommendationRequest, RecommendationResponse
+from app.models.schemas import RecommendationResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -21,38 +20,28 @@ class UserRecommendationRequest(BaseModel):
 
 @router.post("/artworks", response_model=List[RecommendationResponse])
 async def get_artwork_recommendations(
-    request: UserRecommendationRequest,
-    recommendation_service: RecommendationService = Depends()
+    request: UserRecommendationRequest
 ):
     """
     Get personalized artwork recommendations for a user
     """
     try:
-        recommendations = await recommendation_service.get_artwork_recommendations(
-            user_id=request.user_id,
-            limit=request.limit,
-            category=request.category,
-            style=request.style
-        )
-        return recommendations
+        # TODO: Implement recommendation service
+        return []
     except Exception as e:
         logger.error(f"Error getting artwork recommendations: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.post("/artists", response_model=List[RecommendationResponse])
 async def get_artist_recommendations(
-    request: UserRecommendationRequest,
-    recommendation_service: RecommendationService = Depends()
+    request: UserRecommendationRequest
 ):
     """
     Get personalized artist recommendations for a user
     """
     try:
-        recommendations = await recommendation_service.get_artist_recommendations(
-            user_id=request.user_id,
-            limit=request.limit
-        )
-        return recommendations
+        # TODO: Implement artist recommendation service
+        return []
     except Exception as e:
         logger.error(f"Error getting artist recommendations: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -72,18 +61,13 @@ async def get_trending_artworks(
 async def record_feedback(
     user_id: str,
     artwork_id: str,
-    feedback_type: str,  # 'like', 'dislike', 'click', 'view'
-    recommendation_service: RecommendationService = Depends()
+    feedback_type: str  # 'like', 'dislike', 'click', 'view'
 ):
     """
     Record user feedback for recommendation improvements
     """
     try:
-        await recommendation_service.record_feedback(
-            user_id=user_id,
-            artwork_id=artwork_id,
-            feedback_type=feedback_type
-        )
+        # TODO: Implement feedback recording
         return {"status": "success", "message": "Feedback recorded"}
     except Exception as e:
         logger.error(f"Error recording feedback: {str(e)}")

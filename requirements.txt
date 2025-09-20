@@ -2,6 +2,7 @@
 fastapi[all]==0.104.1
 uvicorn[standard]==0.24.0
 pydantic==2.5.0
+pydantic-settings==2.1.0
 
 # Machine Learning
 torch==2.1.1
@@ -19,7 +20,6 @@ transformers==4.36.2
 # Database & ORM
 sqlalchemy==2.0.23
 alembic==1.13.1
-sqlite3
 
 # HTTP & API
 httpx==0.25.2

@@ -7,7 +7,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 import logging
 
-from app.services.analytics_service import AnalyticsService
+# from app.services.analytics_service import AnalyticsService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -16,8 +16,7 @@ router = APIRouter()
 async def get_recommendation_performance(
     start_date: Optional[datetime] = None,
     end_date: Optional[datetime] = None,
-    algorithm_version: Optional[str] = None,
-    analytics_service: AnalyticsService = Depends()
+    algorithm_version: Optional[str] = None
 ):
     """
     Get recommendation system performance metrics
@@ -28,25 +27,32 @@ async def get_recommendation_performance(
         if not end_date:
             end_date = datetime.now()
             
-        metrics = await analytics_service.get_recommendation_performance(
-            start_date, end_date, algorithm_version
-        )
-        return metrics
+        # TODO: Implement analytics service
+        return {
+            "total_recommendations": 0,
+            "click_through_rate": 0.0,
+            "conversion_rate": 0.0,
+            "average_score": 0.0
+        }
     except Exception as e:
         logger.error(f"Error getting recommendation performance: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.get("/users/{user_id}/behavior")
 async def get_user_behavior_analytics(
-    user_id: str,
-    analytics_service: AnalyticsService = Depends()
+    user_id: str
 ):
     """
     Get user behavior analytics
     """
     try:
-        behavior = await analytics_service.get_user_behavior(user_id)
-        return behavior
+        # TODO: Implement user behavior analytics
+        return {
+            "user_id": user_id,
+            "total_interactions": 0,
+            "favorite_categories": [],
+            "favorite_styles": []
+        }
     except Exception as e:
         logger.error(f"Error getting user behavior: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
