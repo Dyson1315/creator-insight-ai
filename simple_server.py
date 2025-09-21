@@ -45,8 +45,56 @@ if not SECRET_KEY or len(SECRET_KEY) < 32:
 # Creator-VRidge API configuration
 CREATOR_VRIDGE_API_BASE = os.environ.get('CREATOR_VRIDGE_API_BASE', 'http://localhost:3001/api')
 CREATOR_VRIDGE_API_TOKEN = os.environ.get('CREATOR_VRIDGE_API_TOKEN')
+
+def get_fresh_token():
+    """Creator-VRidge APIから最新のトークンを取得"""
+    try:
+        token_url = f"{CREATOR_VRIDGE_API_BASE}/ai-integration/token"
+        response = urllib.request.urlopen(token_url, timeout=10)
+        data = json.loads(response.read().decode())
+        return data.get('token')
+    except Exception as e:
+        logger.error(f"Failed to get fresh token: {e}")
+        return None
+
+def load_creator_vridge_config():
+    """Creator-VRidge APIから設定を自動取得"""
+    try:
+        config_url = f"{CREATOR_VRIDGE_API_BASE}/ai-integration/config"
+        response = urllib.request.urlopen(config_url, timeout=10)
+        config_data = json.loads(response.read().decode())
+
+        # トークンを取得
+        token = get_fresh_token()
+        if not token:
+            logger.warning("Failed to get fresh token, using environment variable")
+            token = CREATOR_VRIDGE_API_TOKEN
+
+        return {
+            'base_url': config_data.get('config', {}).get('baseUrl', CREATOR_VRIDGE_API_BASE),
+            'token': token,
+            'endpoints': config_data.get('config', {}).get('endpoints', {})
+        }
+    except Exception as e:
+        logger.error(f"Failed to load config: {e}")
+        # Fallback to environment variables
+        return {
+            'base_url': CREATOR_VRIDGE_API_BASE,
+            'token': CREATOR_VRIDGE_API_TOKEN,
+            'endpoints': {}
+        }
+
+# Load dynamic configuration
+try:
+    dynamic_config = load_creator_vridge_config()
+    CREATOR_VRIDGE_API_BASE = dynamic_config['base_url']
+    CREATOR_VRIDGE_API_TOKEN = dynamic_config['token']
+    logger.info("Successfully loaded dynamic configuration from Creator-VRidge API")
+except Exception as e:
+    logger.warning(f"Using fallback configuration: {e}")
+
 if not CREATOR_VRIDGE_API_TOKEN:
-    raise ValueError("CREATOR_VRIDGE_API_TOKEN environment variable is required")
+    raise ValueError("CREATOR_VRIDGE_API_TOKEN could not be obtained from API or environment variables")
 
 # Server configuration
 SERVER_HOST = os.environ.get('SERVER_HOST', '127.0.0.1')
@@ -400,7 +448,7 @@ class CreatorInsightHandler(BaseHTTPRequestHandler):
     def generate_mock_artworks(self, count):
         """Get artwork data from creator-vridge API"""
         # Try to get artworks from creator-vridge API
-        api_url = f"{CREATOR_VRIDGE_API_BASE}/v1/artworks/recommendations?limit={count}"
+        api_url = f"{CREATOR_VRIDGE_API_BASE}/recommendations/artworks?limit={count}"
         
         # Use token from environment variables
         headers = {
@@ -410,7 +458,7 @@ class CreatorInsightHandler(BaseHTTPRequestHandler):
         }
         
         request = urllib.request.Request(api_url, headers=headers)
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with urllib.request.urlopen(request, timeout=30) as response:
             if response.status == 200:
                 data = json.loads(response.read().decode())
                 return self.map_api_artworks_to_format(data.get('recommendations', []))
