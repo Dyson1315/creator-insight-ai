@@ -14,29 +14,177 @@ import urllib.error
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 import logging
+import hashlib
+import hmac
+from datetime import datetime, timedelta
+
+# Load environment variables
+def load_env():
+    """Load environment variables from .env file"""
+    try:
+        with open('.env', 'r') as f:
+            for line in f:
+                if line.strip() and not line.startswith('#'):
+                    key, value = line.strip().split('=', 1)
+                    os.environ[key] = value
+    except FileNotFoundError:
+        logger.warning("No .env file found, using system environment variables")
+
+load_env()
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+log_level = os.environ.get('LOG_LEVEL', 'INFO')
+logging.basicConfig(level=getattr(logging, log_level))
 logger = logging.getLogger(__name__)
 
+# Security Configuration
+SECRET_KEY = os.environ.get('SECRET_KEY')
+if not SECRET_KEY or len(SECRET_KEY) < 32:
+    raise ValueError("SECRET_KEY must be at least 32 characters long")
+
 # Creator-VRidge API configuration
-CREATOR_VRIDGE_API_BASE = "http://localhost:3001/api"
+CREATOR_VRIDGE_API_BASE = os.environ.get('CREATOR_VRIDGE_API_BASE', 'http://localhost:3001/api')
+CREATOR_VRIDGE_API_TOKEN = os.environ.get('CREATOR_VRIDGE_API_TOKEN')
+if not CREATOR_VRIDGE_API_TOKEN:
+    raise ValueError("CREATOR_VRIDGE_API_TOKEN environment variable is required")
+
+# Server configuration
+SERVER_HOST = os.environ.get('SERVER_HOST', '127.0.0.1')
+SERVER_PORT = int(os.environ.get('SERVER_PORT', 8000))
+DEBUG = os.environ.get('DEBUG', 'False').lower() == 'true'
+
+# CORS configuration
+ALLOWED_ORIGINS = os.environ.get('ALLOWED_ORIGINS', 'http://localhost:3000').split(',')
+
+# Rate limiting configuration
+RATE_LIMIT_REQUESTS = int(os.environ.get('RATE_LIMIT_REQUESTS', 100))
+RATE_LIMIT_WINDOW = int(os.environ.get('RATE_LIMIT_WINDOW', 3600))
+
+# Rate limiting storage
+rate_limit_storage = {}
+
+def check_rate_limit(client_ip):
+    """Simple rate limiting check"""
+    current_time = time.time()
+    window_start = current_time - RATE_LIMIT_WINDOW
+    
+    if client_ip not in rate_limit_storage:
+        rate_limit_storage[client_ip] = []
+    
+    # Remove old requests
+    rate_limit_storage[client_ip] = [
+        req_time for req_time in rate_limit_storage[client_ip] 
+        if req_time > window_start
+    ]
+    
+    # Check if limit exceeded
+    if len(rate_limit_storage[client_ip]) >= RATE_LIMIT_REQUESTS:
+        return False
+    
+    # Add current request
+    rate_limit_storage[client_ip].append(current_time)
+    return True
+
+def validate_api_key(api_key):
+    """Validate API key (simple implementation)"""
+    if not api_key:
+        return False
+    
+    # For demo purposes, accept any key that starts with 'ai-api-'
+    # In production, use proper key validation
+    return api_key.startswith('ai-api-') and len(api_key) > 10
+
+def sanitize_input(data):
+    """Basic input sanitization"""
+    if isinstance(data, dict):
+        sanitized = {}
+        for key, value in data.items():
+            if isinstance(value, str):
+                # Remove potentially dangerous characters
+                sanitized[key] = value.replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
+            elif isinstance(value, (int, float)):
+                sanitized[key] = value
+            elif isinstance(value, list):
+                sanitized[key] = [sanitize_input(item) for item in value]
+        return sanitized
+    elif isinstance(data, str):
+        return data.replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
+    return data
 
 class CreatorInsightHandler(BaseHTTPRequestHandler):
-    """Minimal HTTP handler for Creator Insight API"""
+    """Secure HTTP handler for Creator Insight API"""
+    
+    def add_security_headers(self):
+        """Add security headers to response"""
+        self.send_header('X-Content-Type-Options', 'nosniff')
+        self.send_header('X-Frame-Options', 'DENY')
+        self.send_header('X-XSS-Protection', '1; mode=block')
+        self.send_header('Referrer-Policy', 'strict-origin-when-cross-origin')
+        
+        # CORS headers with proper validation
+        origin = self.headers.get('Origin')
+        if origin and origin in ALLOWED_ORIGINS:
+            self.send_header('Access-Control-Allow-Origin', origin)
+            self.send_header('Access-Control-Allow-Credentials', 'true')
+        
+        self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-Key')
+    
+    def check_authentication(self):
+        """Check API key authentication"""
+        api_key = self.headers.get('X-API-Key')
+        if not validate_api_key(api_key):
+            self.send_response(401)
+            self.send_header('Content-type', 'application/json')
+            self.add_security_headers()
+            self.end_headers()
+            error_response = {
+                "error": "Unauthorized",
+                "message": "Valid API key required"
+            }
+            self.wfile.write(json.dumps(error_response).encode())
+            return False
+        return True
+    
+    def check_rate_limit_for_request(self):
+        """Check rate limiting for current request"""
+        client_ip = self.client_address[0]
+        if not check_rate_limit(client_ip):
+            self.send_response(429)
+            self.send_header('Content-type', 'application/json')
+            self.add_security_headers()
+            self.end_headers()
+            error_response = {
+                "error": "Rate limit exceeded",
+                "message": f"Maximum {RATE_LIMIT_REQUESTS} requests per {RATE_LIMIT_WINDOW} seconds"
+            }
+            self.wfile.write(json.dumps(error_response).encode())
+            return False
+        return True
+    
+    def do_OPTIONS(self):
+        """Handle preflight requests"""
+        self.send_response(200)
+        self.add_security_headers()
+        self.end_headers()
     
     def do_GET(self):
         """Handle GET requests"""
+        # Check rate limiting first
+        if not self.check_rate_limit_for_request():
+            return
+        
         parsed_path = urlparse(self.path)
         path = parsed_path.path
         
         if path == '/':
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
+            self.add_security_headers()
             self.end_headers()
             response = {
-                "message": "Creator-VRidge AI Recommendation System (Minimal)",
-                "version": "1.0.0-minimal",
+                "message": "Creator-VRidge AI Recommendation System",
+                "version": "1.0.0-secure",
                 "status": "running"
             }
             self.wfile.write(json.dumps(response).encode())
@@ -44,45 +192,80 @@ class CreatorInsightHandler(BaseHTTPRequestHandler):
         elif path == '/health':
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
+            self.add_security_headers()
             self.end_headers()
             response = {
                 "status": "healthy",
-                "database": "sqlite (minimal)",
-                "ml_models": "mock"
+                "security": "enabled"
             }
             self.wfile.write(json.dumps(response).encode())
             
         elif path.startswith('/api/v1/recommendations/artworks'):
+            # Check authentication for protected endpoints
+            if not self.check_authentication():
+                return
             self.handle_artwork_recommendations()
         elif path.startswith('/api/v1/recommendations'):
+            if not self.check_authentication():
+                return
             self.handle_recommendations()
             
         elif path.startswith('/api/v1/images'):
+            if not self.check_authentication():
+                return
             self.handle_images()
             
         elif path.startswith('/api/v1/analytics'):
+            if not self.check_authentication():
+                return
             self.handle_analytics()
             
         else:
             self.send_response(404)
             self.send_header('Content-type', 'application/json')
+            self.add_security_headers()
             self.end_headers()
             response = {"error": "Not found"}
             self.wfile.write(json.dumps(response).encode())
     
     def do_POST(self):
         """Handle POST requests"""
+        # Check rate limiting first
+        if not self.check_rate_limit_for_request():
+            return
+        
+        # Check authentication for all POST requests
+        if not self.check_authentication():
+            return
+        
         parsed_path = urlparse(self.path)
         path = parsed_path.path
         
-        # Get request body
+        # Get request body with size limit
         content_length = int(self.headers.get('Content-Length', 0))
+        if content_length > 1024 * 1024:  # 1MB limit
+            self.send_response(413)
+            self.send_header('Content-type', 'application/json')
+            self.add_security_headers()
+            self.end_headers()
+            response = {"error": "Request too large"}
+            self.wfile.write(json.dumps(response).encode())
+            return
+        
         post_data = self.rfile.read(content_length)
         
         try:
             data = json.loads(post_data.decode()) if post_data else {}
+            # Sanitize input data
+            data = sanitize_input(data)
         except json.JSONDecodeError:
-            data = {}
+            self.send_response(400)
+            self.send_header('Content-type', 'application/json')
+            self.add_security_headers()
+            self.end_headers()
+            response = {"error": "Invalid JSON"}
+            self.wfile.write(json.dumps(response).encode())
+            return
         
         if path.startswith('/api/v1/recommendations/artworks'):
             self.handle_artwork_recommendations_post(data)
@@ -93,6 +276,7 @@ class CreatorInsightHandler(BaseHTTPRequestHandler):
         else:
             self.send_response(404)
             self.send_header('Content-type', 'application/json')
+            self.add_security_headers()
             self.end_headers()
             response = {"error": "Not found"}
             self.wfile.write(json.dumps(response).encode())
@@ -151,13 +335,18 @@ class CreatorInsightHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(response).encode())
             
         except Exception as e:
-            logger.error(f"Failed to get artwork recommendations: {e}")
+            # Log detailed error but don't expose it
+            logger.error(f"Failed to get artwork recommendations: {str(e)}")
+            if DEBUG:
+                logger.debug(f"Exception details: {e}")
+            
             self.send_response(503)
             self.send_header('Content-type', 'application/json')
+            self.add_security_headers()
             self.end_headers()
             error_response = {
                 "error": "Service unavailable",
-                "message": "Unable to connect to Creator-VRidge API"
+                "message": "Unable to process request"
             }
             self.wfile.write(json.dumps(error_response).encode())
     
@@ -193,13 +382,18 @@ class CreatorInsightHandler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(response).encode())
             
         except Exception as e:
-            logger.error(f"Failed to get artwork recommendations: {e}")
+            # Log detailed error but don't expose it
+            logger.error(f"Failed to get artwork recommendations: {str(e)}")
+            if DEBUG:
+                logger.debug(f"Exception details: {e}")
+            
             self.send_response(503)
             self.send_header('Content-type', 'application/json')
+            self.add_security_headers()
             self.end_headers()
             error_response = {
                 "error": "Service unavailable",
-                "message": "Unable to connect to Creator-VRidge API"
+                "message": "Unable to process request"
             }
             self.wfile.write(json.dumps(error_response).encode())
     
@@ -208,10 +402,10 @@ class CreatorInsightHandler(BaseHTTPRequestHandler):
         # Try to get artworks from creator-vridge API
         api_url = f"{CREATOR_VRIDGE_API_BASE}/v1/artworks/recommendations?limit={count}"
         
-        # Use valid AI user token
+        # Use token from environment variables
         headers = {
             'Content-Type': 'application/json',
-            'Authorization': 'Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiI1NWNmYzkwMC05N2JkLTQ3ZWYtYjk2Ni1lMzlmZTQzYmE2YWYiLCJ1c2VyVHlwZSI6IkFJIiwiZW1haWwiOiJhaS1hcGlAY3JlYXRvci12cmlkZ2UuY29tIiwiaWF0IjoxNzU4NDgwODIxLCJleHAiOjE3NTkwODU2MjEsImF1ZCI6ImNyZWF0b3J2cmlkZ2UtYXBwIiwiaXNzIjoiY3JlYXRvcnZyaWRnZS1hcGkifQ.47X_Gn3t8t4kXdSNZ9FxXqVwGyQjEac13b55h-9gpSw',
+            'Authorization': f'Bearer {CREATOR_VRIDGE_API_TOKEN}',
             'Origin': 'http://localhost:3000'
         }
         
@@ -368,25 +562,24 @@ def setup_database():
         conn.close()
         logger.info("Database initialized")
 
-def run_server(port=8000):
-    """Run the minimal server"""
+def run_server():
+    """Run the secure server"""
     setup_database()
     
-    server_address = ('127.0.0.1', port)
+    server_address = (SERVER_HOST, SERVER_PORT)
     httpd = HTTPServer(server_address, CreatorInsightHandler)
     
-    logger.info(f"Starting Creator-VRidge AI minimal server on port {port}")
-    logger.info(f"Access the API at: http://127.0.0.1:{port}")
-    logger.info(f"Also available at: http://localhost:{port}")
-    logger.info("Available endpoints:")
-    logger.info("  GET  / - Health check")
-    logger.info("  GET  /health - Detailed health")
-    logger.info("  GET  /api/v1/recommendations - Get recommendations")
-    logger.info("  POST /api/v1/recommendations - Update preferences")
+    logger.info(f"Starting Creator-VRidge AI secure server on {SERVER_HOST}:{SERVER_PORT}")
+    logger.info(f"Security features enabled:")
+    logger.info(f"  - API key authentication: Required")
+    logger.info(f"  - Rate limiting: {RATE_LIMIT_REQUESTS} requests per {RATE_LIMIT_WINDOW}s")
+    logger.info(f"  - CORS origins: {ALLOWED_ORIGINS}")
+    logger.info(f"  - Debug mode: {DEBUG}")
+    logger.info("Available endpoints (require X-API-Key header):")
+    logger.info("  GET  / - Health check (public)")
+    logger.info("  GET  /health - System health (public)")
     logger.info("  GET  /api/v1/recommendations/artworks - Get artwork recommendations")
     logger.info("  POST /api/v1/recommendations/artworks - Get artwork recommendations with preferences")
-    logger.info("  GET  /api/v1/images - Get images")
-    logger.info("  POST /api/v1/images - Process image")
     logger.info("  GET  /api/v1/analytics - Get analytics")
     logger.info("Press Ctrl+C to stop")
     
