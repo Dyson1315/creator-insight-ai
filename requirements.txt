@@ -4,18 +4,17 @@ uvicorn[standard]==0.24.0
 pydantic==2.5.0
 pydantic-settings==2.1.0
 
-# Machine Learning
-torch==2.1.1
-torchvision==0.16.1
-tensorflow==2.15.0
-scikit-learn==1.3.2
-numpy==1.24.4
-pandas==2.1.4
+# Machine Learning (lighter versions for development)
+torch>=2.2.0
+torchvision>=0.17.0
+scikit-learn>=1.3.2
+numpy>=1.24.4
+pandas>=2.1.4
 
 # Image Processing
-opencv-python==4.8.1.78
+opencv-python-headless==4.8.1.78
 Pillow==10.1.0
-transformers==4.36.2
+sentence-transformers==2.2.2
 
 # Database & ORM
 sqlalchemy==2.0.23
